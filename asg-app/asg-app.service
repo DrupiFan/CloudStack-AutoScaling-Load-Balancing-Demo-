@@ -1,0 +1,14 @@
+[Unit]
+Description=ASG Demo Web App
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/cloudstack-asg-demo/asg-app
+Environment=MONITOR_URL=http://MONITOR_PRIVATE_IP:5000/heartbeat
+ExecStart=/opt/cloudstack-asg-demo/asg-app/venv/bin/python3 /opt/cloudstack-asg-demo/asg-app/app.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UGT Cloud — ASG / LB Demo Dashboard</title>
+<link rel="icon" href="logo.png">
+<script src="chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --text:#e2e8f0; --muted:#94a3b8;
+    --accent:#38bdf8; --green:#4ade80; --red:#f87171; --yellow:#fbbf24; --border:#334155;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:20px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  header h1{margin:0;font-size:20px;color:var(--accent)}
+  header .sub{color:var(--muted);font-size:13px}
+  main{padding:24px 28px;display:grid;gap:24px;grid-template-columns:1fr 1fr}
+  section{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px}
+  section h2{margin:0 0 14px;font-size:15px;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+  .full{grid-column:1/-1}
+  .instances-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+  .instance-card{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px;position:relative;transition:opacity .3s}
+  .instance-card.removed{opacity:.4}
+  .instance-card .name{font-weight:600;font-size:14px}
+  .instance-card .ip{color:var(--muted);font-size:12px;margin-bottom:10px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
+  .dot.active{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .dot.removed{background:var(--red)}
+  .bar-row{margin:6px 0;font-size:12px;color:var(--muted)}
+  .bar-track{background:#0f172a;border-radius:6px;height:8px;overflow:hidden;margin-top:3px}
+  .bar-fill{height:100%;border-radius:6px}
+  .bar-fill.cpu{background:var(--accent)}
+  .bar-fill.ram{background:var(--yellow)}
+  .reqs{margin-top:8px;font-size:12px;color:var(--muted)}
+  .empty{color:var(--muted);font-size:13px}
+  .controls label{display:block;font-size:12px;color:var(--muted);margin:12px 0 4px}
+  .controls input[type=text]{width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text)}
+  .controls input[type=range]{width:100%}
+  .slider-val{color:var(--accent);font-weight:600}
+  .btn-row{display:flex;gap:10px;margin-top:16px}
+  button{cursor:pointer;border:none;border-radius:8px;padding:10px 18px;font-weight:600;font-size:13px}
+  button.start{background:var(--green);color:#052e16}
+  button.stop{background:var(--red);color:#450a0a}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .stat-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin:18px 0 6px}
+  .stat-box{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px 10px;text-align:center;transition:transform .2s}
+  .stat-box .stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+  .stat-box .stat-value{font-size:30px;font-weight:800;line-height:1}
+  .stat-box.sent .stat-value{color:var(--accent)}
+  .stat-box.success .stat-value{color:var(--green)}
+  .stat-box.errors .stat-value{color:var(--red)}
+  .stat-box.timeleft .stat-value{color:var(--yellow)}
+  section:hover{box-shadow:0 6px 20px rgba(0,0,0,.25)}
+  section{transition:box-shadow .2s}
+  #last-update{background:var(--panel2);border:1px solid var(--border);padding:5px 14px;border-radius:20px}
+  .log-panel{max-height:260px;overflow-y:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .log-entry{padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:10px}
+  .log-entry .ts{color:var(--muted);white-space:nowrap}
+  .log-entry.instance_added .tag{color:var(--green)}
+  .log-entry.instance_removed .tag{color:var(--red)}
+  .log-entry.loadtest_started .tag,.log-entry.loadtest_finished .tag,.log-entry.loadtest_stopped .tag{color:var(--accent)}
+  .tag{font-weight:700;white-space:nowrap}
+  canvas{max-height:280px}
+  .status-pill{font-size:11px;padding:3px 9px;border-radius:20px;background:#0f172a;color:var(--muted);margin-left:10px}
+  .status-pill.running{color:var(--green);background:#052e16}
+</style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:16px">
+    <img src="logo.png" alt="UGT Cloud" style="height:64px;width:auto">
+    <div>
+      <h1>UGT Cloud Auto Scaling &amp; Load Balancing Demo</h1>
+      <div class="sub">Live monitoring dashboard</div>
+    </div>
+  </div>
+  <div class="sub" id="last-update">not updated yet</div>
+</header>
+
+<main>
+
+  <section class="full">
+    <h2>Active ASG Instances</h2>
+    <div id="instances" class="instances-grid"><div class="empty">Waiting for heartbeats from ASG instances…</div></div>
+  </section>
+
+  <section>
+    <h2>Request Distribution</h2>
+    <canvas id="distChart"></canvas>
+  </section>
+
+  <section>
+    <h2>Load Generator <span id="lt-status" class="status-pill">idle</span></h2>
+    <div class="controls">
+      <label>Target base URL (your ASG public LB IP, no path)</label>
+      <input type="text" id="target" placeholder="http://YOUR.PUBLIC.LB.IP">
+
+      <label>Mode</label>
+      <select id="mode" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text)">
+        <option value="light">Light — hits /info (LB distribution only, low CPU)</option>
+        <option value="heavy" selected>Heavy — hits /burn (spikes CPU, triggers autoscale)</option>
+      </select>
+
+      <label>Concurrency (parallel workers): <span class="slider-val" id="concurrency-val">30</span></label>
+      <input type="range" id="concurrency" min="1" max="200" value="30">
+
+      <label>Duration (seconds): <span class="slider-val" id="duration-val">120</span></label>
+      <input type="range" id="duration" min="5" max="600" step="5" value="120">
+
+      <label>CPU burn per request (seconds, heavy mode only — higher = more intense): <span class="slider-val" id="burn-val">4</span></label>
+      <input type="range" id="burn" min="1" max="15" step="1" value="4">
+
+      <label>Delay between requests per worker (ms, lower = more intense): <span class="slider-val" id="delay-val">0</span></label>
+      <input type="range" id="delay" min="0" max="2000" step="10" value="0">
+
+      <div class="btn-row">
+        <button class="start" id="startBtn" onclick="startLoadtest()">Start</button>
+        <button class="stop" id="stopBtn" onclick="stopLoadtest()" disabled>Stop</button>
+      </div>
+
+      <div class="stat-strip">
+        <div class="stat-box sent">
+          <div class="stat-label">Sent</div>
+          <div class="stat-value" id="stat-sent">0</div>
+        </div>
+        <div class="stat-box success">
+          <div class="stat-label">Success</div>
+          <div class="stat-value" id="stat-success">0</div>
+        </div>
+        <div class="stat-box errors">
+          <div class="stat-label">Errors</div>
+          <div class="stat-value" id="stat-errors">0</div>
+        </div>
+        <div class="stat-box timeleft">
+          <div class="stat-label">Time Left</div>
+          <div class="stat-value" id="stat-timeleft">-</div>
+        </div>
+      </div>
+      <div id="stat-lasterror" style="display:none;margin-top:10px;padding:8px 12px;background:#450a0a;color:#fecaca;border-radius:8px;font-size:12px;font-family:ui-monospace,monospace"></div>
+    </div>
+  </section>
+
+  <section class="full">
+    <h2>Event Log</h2>
+    <div class="log-panel" id="logs"><div class="empty">No events yet.</div></div>
+  </section>
+
+</main>
+
+<script>
+let distChart;
+
+function colorForLabel(label){
+  // stable color per instance label (hash-based so it doesn't shuffle on refresh)
+  const palette = ['#38bdf8','#fbbf24','#4ade80','#f87171','#a78bfa','#fb923c','#2dd4bf','#f472b6','#818cf8','#facc15'];
+  let hash = 0;
+  for(let i=0;i<label.length;i++){ hash = (hash*31 + label.charCodeAt(i)) >>> 0; }
+  return palette[hash % palette.length];
+}
+
+function initChart(){
+  const ctx = document.getElementById('distChart').getContext('2d');
+  distChart = new Chart(ctx, {
+    type: 'pie',
+    data: { labels: [], datasets: [{ label: 'Requests served', data: [], backgroundColor: [] }] },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: true, position: 'bottom', labels: { color: '#e2e8f0' } } }
+    }
+  });
+}
+
+function fmtTime(ts){
+  const d = new Date(ts*1000);
+  return d.toLocaleTimeString();
+}
+
+async function refreshInstances(){
+  const res = await fetch('/instances');
+  const data = await res.json();
+  const container = document.getElementById('instances');
+  if(data.length === 0){
+    container.innerHTML = '<div class="empty">Waiting for heartbeats from ASG instances…</div>';
+    return;
+  }
+  container.innerHTML = data.map(inst => `
+    <div class="instance-card ${inst.status}">
+      <div class="name"><span class="dot ${inst.status}"></span>${inst.name}</div>
+      <div class="ip">${inst.ip}</div>
+      <div class="bar-row">CPU ${inst.cpu}%
+        <div class="bar-track"><div class="bar-fill cpu" style="width:${inst.cpu}%"></div></div>
+      </div>
+      <div class="bar-row">RAM ${inst.ram}%
+        <div class="bar-track"><div class="bar-fill ram" style="width:${inst.ram}%"></div></div>
+      </div>
+      <div class="reqs">Requests served: ${inst.request_count}</div>
+    </div>
+  `).join('');
+  document.getElementById('last-update').innerText = 'updated ' + new Date().toLocaleTimeString();
+}
+
+async function refreshDistribution(){
+  const res = await fetch('/distribution');
+  const data = await res.json();
+  const labels = Object.keys(data);
+  const values = Object.values(data);
+  distChart.data.labels = labels;
+  distChart.data.datasets[0].data = values;
+  distChart.data.datasets[0].backgroundColor = labels.map(colorForLabel);
+  distChart.update();
+}
+
+async function refreshLogs(){
+  const res = await fetch('/logs');
+  const data = await res.json();
+  const container = document.getElementById('logs');
+  if(data.length === 0){
+    container.innerHTML = '<div class="empty">No events yet.</div>';
+    return;
+  }
+  container.innerHTML = data.map(ev => `
+    <div class="log-entry ${ev.type}">
+      <span class="ts">${fmtTime(ev.ts)}</span>
+      <span class="tag">[${ev.type}]</span>
+      <span>${ev.message}</span>
+    </div>
+  `).join('');
+}
+
+async function refreshLoadtestStatus(){
+  const res = await fetch('/loadtest/status');
+  const s = await res.json();
+  document.getElementById('stat-sent').innerText = s.sent;
+  document.getElementById('stat-success').innerText = s.success;
+  document.getElementById('stat-errors').innerText = s.errors;
+  document.getElementById('startBtn').disabled = s.running;
+  document.getElementById('stopBtn').disabled = !s.running;
+  const pill = document.getElementById('lt-status');
+  pill.innerText = s.running ? 'running' : 'idle';
+  pill.className = 'status-pill' + (s.running ? ' running' : '');
+  const timeleft = document.getElementById('stat-timeleft');
+  if(s.running && s.end_time){
+    const remaining = Math.max(0, Math.round(s.end_time - (Date.now()/1000)));
+    timeleft.innerText = remaining + 's';
+  } else {
+    timeleft.innerText = '-';
+  }
+  const errBox = document.getElementById('stat-lasterror');
+  if(s.last_error){
+    errBox.style.display = 'block';
+    errBox.innerText = 'Last error: ' + s.last_error;
+  } else {
+    errBox.style.display = 'none';
+  }
+}
+
+async function startLoadtest(){
+  const target = document.getElementById('target').value.trim();
+  if(!target){ alert('Enter a target URL first (your ASG public LB IP).'); return; }
+  const body = {
+    target: target,
+    mode: document.getElementById('mode').value,
+    concurrency: parseInt(document.getElementById('concurrency').value),
+    duration_seconds: parseInt(document.getElementById('duration').value),
+    burn_seconds: parseInt(document.getElementById('burn').value),
+    delay_ms: parseInt(document.getElementById('delay').value)
+  };
+  const res = await fetch('/loadtest/start', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  if(!res.ok){ const e = await res.json(); alert(e.error || 'failed to start'); }
+}
+
+async function stopLoadtest(){
+  await fetch('/loadtest/stop', { method: 'POST' });
+}
+
+// slider live labels
+['concurrency','duration','burn','delay'].forEach(id=>{
+  const el = document.getElementById(id);
+  const label = document.getElementById(id+'-val');
+  el.addEventListener('input', ()=> label.innerText = el.value);
+});
+
+function tick(){
+  refreshInstances();
+  refreshDistribution();
+  refreshLogs();
+  refreshLoadtestStatus();
+}
+
+initChart();
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
