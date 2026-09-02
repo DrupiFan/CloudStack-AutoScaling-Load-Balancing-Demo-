@@ -7,16 +7,16 @@
 <script src="chart.umd.min.js"></script>
 <style>
   :root{
-    --bg:#0f172a; --panel:#1e293b; --panel2:#172033; --text:#e2e8f0; --muted:#94a3b8;
-    --accent:#38bdf8; --green:#4ade80; --red:#f87171; --yellow:#fbbf24; --border:#334155;
+    --bg:#f4f8fc; --panel:#ffffff; --panel2:#eaf2fc; --text:#1e293b; --muted:#5b7290;
+    --accent:#2563eb; --green:#16a34a; --red:#dc2626; --yellow:#d97706; --border:#d6e6fb;
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text)}
-  header{padding:20px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  header{padding:20px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:linear-gradient(180deg,#eaf2fc 0%,#f4f8fc 100%)}
   header h1{margin:0;font-size:20px;color:var(--accent)}
   header .sub{color:var(--muted);font-size:13px}
   main{padding:24px 28px;display:grid;gap:24px;grid-template-columns:1fr 1fr}
-  section{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px}
+  section{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;box-shadow:0 1px 3px rgba(30,64,175,.06)}
   section h2{margin:0 0 14px;font-size:15px;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
   .full{grid-column:1/-1}
   .instances-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
@@ -28,7 +28,7 @@
   .dot.active{background:var(--green);box-shadow:0 0 6px var(--green)}
   .dot.removed{background:var(--red)}
   .bar-row{margin:6px 0;font-size:12px;color:var(--muted)}
-  .bar-track{background:#0f172a;border-radius:6px;height:8px;overflow:hidden;margin-top:3px}
+  .bar-track{background:var(--border);border-radius:6px;height:8px;overflow:hidden;margin-top:3px}
   .bar-fill{height:100%;border-radius:6px}
   .bar-fill.cpu{background:var(--accent)}
   .bar-fill.ram{background:var(--yellow)}
@@ -40,8 +40,8 @@
   .slider-val{color:var(--accent);font-weight:600}
   .btn-row{display:flex;gap:10px;margin-top:16px}
   button{cursor:pointer;border:none;border-radius:8px;padding:10px 18px;font-weight:600;font-size:13px}
-  button.start{background:var(--green);color:#052e16}
-  button.stop{background:var(--red);color:#450a0a}
+  button.start{background:var(--green);color:#ffffff}
+  button.stop{background:var(--red);color:#ffffff}
   button:disabled{opacity:.4;cursor:not-allowed}
   .stat-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin:18px 0 6px}
   .stat-box{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px 10px;text-align:center;transition:transform .2s}
@@ -62,8 +62,8 @@
   .log-entry.loadtest_started .tag,.log-entry.loadtest_finished .tag,.log-entry.loadtest_stopped .tag{color:var(--accent)}
   .tag{font-weight:700;white-space:nowrap}
   canvas{max-height:280px}
-  .status-pill{font-size:11px;padding:3px 9px;border-radius:20px;background:#0f172a;color:var(--muted);margin-left:10px}
-  .status-pill.running{color:var(--green);background:#052e16}
+  .status-pill{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--panel2);color:var(--muted);margin-left:10px}
+  .status-pill.running{color:#ffffff;background:var(--green)}
 </style>
 </head>
 <body>
@@ -138,7 +138,7 @@
           <div class="stat-value" id="stat-timeleft">-</div>
         </div>
       </div>
-      <div id="stat-lasterror" style="display:none;margin-top:10px;padding:8px 12px;background:#450a0a;color:#fecaca;border-radius:8px;font-size:12px;font-family:ui-monospace,monospace"></div>
+      <div id="stat-lasterror" style="display:none;margin-top:10px;padding:8px 12px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:8px;font-size:12px;font-family:ui-monospace,monospace"></div>
     </div>
   </section>
 
@@ -167,7 +167,7 @@ function initChart(){
     data: { labels: [], datasets: [{ label: 'Requests served', data: [], backgroundColor: [] }] },
     options: {
       responsive: true,
-      plugins: { legend: { display: true, position: 'bottom', labels: { color: '#e2e8f0' } } }
+      plugins: { legend: { display: true, position: 'bottom', labels: { color: '#1e293b' } } }
     }
   });
 }
