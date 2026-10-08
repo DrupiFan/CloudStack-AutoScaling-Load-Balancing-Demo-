@@ -2,6 +2,7 @@ import time
 import json
 import threading
 import os
+import random
 from urllib.parse import urlsplit
 from flask import Flask, request, jsonify, send_from_directory
 import requests
@@ -165,7 +166,7 @@ def normalize_target(raw):
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds):
+def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, target_max_load):
     while True:
         with LOCK:
             if LOADTEST_STATE["stop_flag"] or time.time() >= LOADTEST_STATE["end_time"]:
@@ -186,15 +187,25 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds):
             time.sleep(0.3)
             continue
 
-        # Dynamic burn time and inter-request delay
         if mode == "heavy":
-            # Scale burn from 1s up to burn_seconds
-            current_burn = max(1, int(burn_seconds * (0.25 + 0.75 * ramp_factor)))
-            url = base_target + f"/burn?seconds={current_burn}"
-            req_timeout = current_burn + 8
-            # Scale extra delay down from 1000ms to 0ms
-            extra_delay = int(1000 * (1.0 - ramp_factor))
-            current_delay = delay_ms + extra_delay
+            # Scale target CPU load from 15% up to target_max_load
+            curr_target_load = max(10, min(100, int(15 + (target_max_load - 15) * ramp_factor)))
+
+            # Probabilistic burn gating: at early ramp stages, send mostly /info (0% CPU)
+            # so the cluster warms up smoothly instead of immediately pinning CPU to 100%
+            burn_probability = min(1.0, max(0.15, ramp_factor * 1.1))
+            if random.random() < burn_probability:
+                current_burn = max(1, int(burn_seconds * (0.3 + 0.7 * ramp_factor)))
+                url = base_target + f"/burn?seconds={current_burn}&load={curr_target_load}"
+                req_timeout = current_burn + 8
+                extra_delay = int(400 * (1.0 - ramp_factor))
+                current_delay = delay_ms + extra_delay
+            else:
+                # Interspersed light request to keep average CPU within target range
+                url = base_target + "/info"
+                req_timeout = 5
+                extra_delay = int(800 * (1.0 - ramp_factor))
+                current_delay = delay_ms + extra_delay
         else:
             url = base_target + "/info"
             req_timeout = 5
@@ -225,10 +236,10 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds):
             time.sleep(current_delay / 1000.0)
 
 
-def run_loadtest(target, mode, concurrency, burn_seconds, delay_ms, ramp_seconds):
+def run_loadtest(target, mode, concurrency, burn_seconds, delay_ms, ramp_seconds, target_max_load):
     threads = []
     for wid in range(concurrency):
-        t = threading.Thread(target=worker, args=(wid, target, mode, burn_seconds, delay_ms, ramp_seconds), daemon=True)
+        t = threading.Thread(target=worker, args=(wid, target, mode, burn_seconds, delay_ms, ramp_seconds, target_max_load), daemon=True)
         threads.append(t)
         t.start()
     for t in threads:
@@ -258,31 +269,35 @@ def loadtest_start():
         # 4: Surge Spike (>90% CPU - Triggers AutoScale with gradual ramp)
         if intensity == 1:
             mode = "light"
-            concurrency = 6
+            concurrency = 3
             burn_seconds = 1
             delay_ms = 150
             ramp_seconds = 0
+            target_max_load = 20
             intensity_name = "Light (Load Balance Demo)"
         elif intensity == 2:
             mode = "heavy"
-            concurrency = 8
-            burn_seconds = 2
+            concurrency = 3
+            burn_seconds = 1
             delay_ms = 400
             ramp_seconds = 15
-            intensity_name = "Moderate Traffic"
+            target_max_load = 45
+            intensity_name = "Moderate Traffic (~45% CPU)"
         elif intensity == 3:
             mode = "heavy"
-            concurrency = 16
-            burn_seconds = 3
-            delay_ms = 100
-            ramp_seconds = 18
-            intensity_name = "Heavy Traffic"
+            concurrency = 4
+            burn_seconds = 2
+            delay_ms = 200
+            ramp_seconds = 22
+            target_max_load = 75
+            intensity_name = "Heavy Traffic (~75% CPU)"
         else:
             mode = "heavy"
-            concurrency = 28
-            burn_seconds = 4
+            concurrency = 6
+            burn_seconds = 3
             delay_ms = 0
-            ramp_seconds = 22
+            ramp_seconds = 28
+            target_max_load = 98
             intensity_name = "Surge Spike (AutoScale Demo)"
     else:
         # Direct parameter fallback
@@ -291,6 +306,7 @@ def loadtest_start():
         burn_seconds = max(1, min(15, int(data.get("burn_seconds", 3))))
         delay_ms = max(0, min(5000, int(data.get("delay_ms", 0))))
         ramp_seconds = max(0, min(60, int(data.get("ramp_seconds", 20 if mode == "heavy" else 0))))
+        target_max_load = int(data.get("target_max_load", 95 if mode == "heavy" else 20))
         intensity = 4 if mode == "heavy" else 1
         intensity_name = f"Custom ({mode})"
 
@@ -312,7 +328,7 @@ def loadtest_start():
     mode_desc = f"{intensity_name} (ramp: {ramp_seconds}s)" if ramp_seconds > 0 else intensity_name
     log_event("loadtest_started",
               f"🚦 Traffic simulation started: {duration_seconds}s duration, mode {mode_desc} -> {target}")
-    threading.Thread(target=run_loadtest, args=(target, mode, concurrency, burn_seconds, delay_ms, ramp_seconds),
+    threading.Thread(target=run_loadtest, args=(target, mode, concurrency, burn_seconds, delay_ms, ramp_seconds, target_max_load),
                       daemon=True).start()
     return jsonify({"ok": True})
 
