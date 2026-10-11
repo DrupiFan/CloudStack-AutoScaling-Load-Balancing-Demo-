@@ -8,14 +8,17 @@ traffic being spread across whichever instances are currently active.
 
 **monitor-app** — a dashboard, meant to run on its own VM:
 - Lists every ASG instance currently alive, with live CPU% and RAM%
-- Shows a pie chart of how load-generated requests were distributed
-  across instances (one color per instance)
+- Shows a doughnut chart of how load-generated requests were
+  distributed across instances (one color per instance)
 - Logs events in real time: instance added, instance removed
   (i.e. scaled up / scaled down), load tests starting/stopping
-- Includes a built-in load generator with sliders — concurrency,
-  duration, request intensity, and a "heavy" mode that spikes CPU
-  on whichever instance answers, so you can actually trigger
-  CloudStack's autoscale policy live during a demo
+- Includes a built-in traffic generator with two presets (load
+  balancing, auto-scaling spike), an intensity level (1-4) and a
+  duration slider. The heavier levels spike CPU on whichever
+  instance answers, so you can trigger CloudStack's autoscale policy
+  live during a demo
+- Shows a live connection indicator, so an unreachable monitor
+  service is visible instead of looking like a healthy cluster
 
 **asg-app** — a tiny app baked into the ASG template, running on every
 ASG instance:
@@ -26,7 +29,7 @@ ASG instance:
   which instance answered each request
 - `/burn?seconds=N` — spins the CPU for N seconds on that instance,
   used by the load generator's "heavy" mode to force a real scale-up
-- Pushes a heartbeat (name, IP, CPU%, RAM%) to monitor-app every 4
+- Pushes a heartbeat (name, IP, CPU%, RAM%) to monitor-app every 3
   seconds
 
 ## How instance discovery works (no CloudStack API needed)
@@ -46,7 +49,7 @@ cloud-init/userdata isn't relied on anywhere in this setup.
 monitor-app/       Dashboard app (Flask) — runs on the monitor VM
   app.py
   requirements.txt
-  static/           index.html, logo.png, chart.umd.min.js (all local, no CDN)
+  static/           index.html, logo.png, favicon.png, fonts/ (Inter) - all local, no CDN
   monitor-app.service
 asg-app/            Per-instance demo app (Flask) — baked into the ASG template
   app.py
@@ -163,25 +166,33 @@ you re-template and swap the VM Profile (step 4 above).
 
 ## Using the dashboard
 
-- **Instance cards** — live CPU/RAM per instance, fades when an
-  instance stops heartbeating, disappears 5 minutes after removal.
-- **Load Generator** — set the Target field to your ASG's public LB IP
-  (no path, e.g. `http://203.0.113.50`), pick Light (`/info`, cheap,
-  good for pure LB-distribution demos) or Heavy (`/burn`, pins CPU,
-  use this to actually trigger autoscale), tune concurrency/duration/
-  burn intensity, hit Start.
-- **Distribution pie chart** — updates live as requests land, colored
-  per instance.
-- **Event log** — scroll to see instance added/removed and load test
-  start/stop events as they happen.
+- **Summary row** — active server count, average CPU and RAM, and
+  total requests served, calculated from active servers only.
+- **Active servers** — one row per server with status (Healthy,
+  Scaled out, Overloaded above 80% CPU, or Removed), CPU, RAM and
+  requests served. A server that stops sending heartbeats shows as
+  Removed and disappears 5 minutes later.
+- **Traffic generator** — enter your ASG's public load balancer IP
+  (no path, e.g. `http://203.0.113.50`; a bare IP also works), pick a
+  preset or set the intensity level and duration, then start. Level 1
+  is light traffic that only shows requests being shared. Levels 2-4
+  generate CPU load, and level 4 ramps up over about 28 seconds to
+  trigger scale-out. The target is remembered in your browser.
+- **Request distribution** — a doughnut chart of requests per active
+  server for the current or last test, colored per server.
+- **Activity log** — servers added or removed and traffic tests
+  starting or stopping, filterable by scaling or traffic events.
+- **Connection indicator** (top right) — Live, Connecting or
+  Disconnected. When the monitor service stops responding, the page
+  says so and marks the data as stale instead of showing it as current.
 
 ## Environment-specific quirks baked into this setup
 
 - Routes deliberately avoid the `/api/` prefix — this network's edge
   filtering blocks that pattern on inbound traffic.
-- `chart.umd.min.js` is vendored locally in `monitor-app/static/`
-  rather than loaded from a CDN, since outbound access to cdnjs is
-  also blocked here.
+- The dashboard uses no CDN. The Inter font is served from
+  `monitor-app/static/fonts/` (license included) and the doughnut chart
+  is plain CSS, because outbound access to cdnjs is blocked here.
 - Werkzeug's per-request access log is silenced and journald is capped
   at 200MB in both apps, so this can run unattended for weeks without
   filling disk.
