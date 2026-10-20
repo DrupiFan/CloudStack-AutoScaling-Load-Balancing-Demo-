@@ -39,9 +39,6 @@ LOADTEST_STATE = {
 
 HEARTBEAT_TIMEOUT = 12          # seconds without a heartbeat -> mark instance removed
 PURGE_AFTER = 300               # seconds after removal -> drop from list entirely
-# Original backends may heartbeat in a few seconds after "Start"; after this, extra
-# VMs are scale-out and must not increase total demand.
-BASELINE_GRACE_SECONDS = 8
 MAX_LOG_ENTRIES = 300
 THRESHOLD_LOGGED = False
 
@@ -199,21 +196,18 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, t
         with LOCK:
             if LOADTEST_STATE["stop_flag"] or time.time() >= LOADTEST_STATE["end_time"]:
                 return
-            now = time.time()
-            started_at = LOADTEST_STATE["started_at"] or now
+            started_at = LOADTEST_STATE["started_at"]
             concurrency = LOADTEST_STATE["concurrency"]
             active = _active_instances()
             n_active = len(active)
+            avg_cpu = (sum(inst["cpu"] for inst in active) / n_active) if n_active else 0
             baseline = LOADTEST_STATE.get("instance_baseline") or 0
-            # Only grow the original set during the first heartbeats. A new VM starts
-            # at ~0% CPU and would pull the cluster average down — that used to look
-            # like "still warming up" and we raised demand back to 90% per VM.
-            if now <= started_at + BASELINE_GRACE_SECONDS:
-                baseline = max(baseline, n_active)
+            # Count original backends as they heartbeat in. Do not raise this after
+            # scale-out (high CPU) or total demand would climb with every new VM.
+            if n_active > baseline and avg_cpu < 65:
+                baseline = n_active
                 LOADTEST_STATE["instance_baseline"] = baseline
-            # LB responses reveal a new backend before (or without) using CPU average
-            n_live = max(n_active, len(DISTRIBUTION))
-        n_live = max(1, n_live)
+        n_active = max(1, n_active)
         n_baseline = max(1, baseline)
 
         # Calculate current ramp factor (0.05 to 1.0) for gradual CPU climb
@@ -236,7 +230,7 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, t
             # Total demand = that target × original backends, shared across whoever is
             # alive now — so min=1/2/3 still hit the scale-out threshold, then average
             # CPU drops when CloudStack adds a VM.
-            curr_target_load = max(5, min(90, int(cluster_load * n_baseline / n_live)))
+            curr_target_load = max(5, min(90, int(cluster_load * n_baseline / n_active)))
 
             # Probabilistic burn gating: at early ramp stages, send mostly /info (0% CPU)
             # so the cluster warms up smoothly instead of immediately pinning CPU
@@ -405,4 +399,3 @@ if __name__ == '__main__':
     logging.getLogger("werkzeug").setLevel(logging.ERROR)  # quiet per-request access log
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, threaded=True)
-  
