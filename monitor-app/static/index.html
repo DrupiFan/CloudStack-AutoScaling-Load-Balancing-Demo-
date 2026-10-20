@@ -75,8 +75,11 @@ th:nth-child(3),th:nth-child(4){width:23%}
 .status.scaled .dot{background:var(--blue)}
 .usage{display:flex;align-items:center;gap:14px}
 .usage strong{width:30px;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
-.track{height:6px;border-radius:8px;background:#e1e7f0;flex:1;max-width:175px;overflow:hidden}
-.track i{display:block;height:100%;border-radius:8px;background:var(--blue);transition:width .5s}
+.track{height:6px;border-radius:8px;background:#e1e7f0;flex:1;max-width:175px;overflow:hidden;position:relative}
+.track i{display:block;height:100%;border-radius:8px;background:var(--blue);transition:width 1.8s cubic-bezier(0.25,1,0.5,1),background-color .4s;position:relative;overflow:hidden}
+.track.active i:after{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.45),transparent);transform:translateX(-100%);animation:shimmer 2.2s infinite ease-in-out}
+@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.track.overloaded i{background:#d98728;box-shadow:0 0 10px rgba(217,135,40,0.5)}
 .requests{font-variant-numeric:tabular-nums;font-weight:500}
 .two-col{display:grid;grid-template-columns:1.12fr 1fr;gap:18px;align-items:stretch;margin-bottom:18px}
 .generator .panel-heading{padding-bottom:15px;border-bottom:1px solid var(--line);margin-bottom:13px}
@@ -355,7 +358,27 @@ tr.is-removed .ip{opacity:.8}
   .server-table tr.state-row{display:block;padding:18px 14px}
   .server-table tr.state-row td{display:block;padding:0;border:0;text-align:center}
   .server-table tr.state-row td:before{content:none}
-}
+.scale-alert-banner{margin-bottom:18px;border-radius:var(--radius);overflow:hidden;transition:all .4s cubic-bezier(0.16,1,0.3,1);background:linear-gradient(135deg,#fff8f0 0%,#fff 100%);border:1px solid #fed7aa;box-shadow:0 4px 18px rgba(217,135,40,.12)}
+.scale-alert-banner.hidden{display:none}
+.scale-alert-inner{padding:14px 20px;display:flex;align-items:center;gap:16px;position:relative}
+.scale-alert-icon{width:42px;height:42px;border-radius:50%;background:#ffedd5;color:#c2410c;display:flex;align-items:center;justify-content:center;flex-shrink:0;animation:pulseScale 1.8s infinite ease-in-out}
+@keyframes pulseScale{0%,100%{transform:scale(1);box-shadow:0 0 0 rgba(217,135,40,0)}50%{transform:scale(1.08);box-shadow:0 0 12px rgba(217,135,40,.4)}}
+.scale-alert-body{flex:1;min-width:0}
+.scale-alert-headline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:3px}
+.scale-alert-headline strong{font-size:14px;font-weight:750;color:#9a3412}
+.scale-alert-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:12px;background:#ea580c;color:#fff;letter-spacing:.5px}
+.scale-alert-body p{font-size:12px;color:#7c2d12;margin:0;line-height:1.45}
+.scale-alert-progress{position:absolute;bottom:0;left:0;right:0;height:3px;background:#ffedd5;overflow:hidden}
+.scale-alert-bar{height:100%;width:100%;background:linear-gradient(90deg,#ea580c,#f59e0b,#ea580c);background-size:200% 100%;animation:progressShimmer 2s infinite linear}
+@keyframes progressShimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.scale-alert-banner.provisioned{background:linear-gradient(135deg,#f0fdf4 0%,#fff 100%);border-color:#bbf7d0;box-shadow:0 4px 18px rgba(22,131,81,.12)}
+.scale-alert-banner.provisioned .scale-alert-icon{background:#dcfce7;color:#168351;animation:bounceSuccess .8s ease}
+@keyframes bounceSuccess{0%,20%,50%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}60%{transform:translateY(-2px)}}
+.scale-alert-banner.provisioned .scale-alert-headline strong{color:#166534}
+.scale-alert-banner.provisioned .scale-alert-badge{background:#168351}
+.scale-alert-banner.provisioned .scale-alert-body p{color:#14532d}
+.scale-alert-banner.provisioned .scale-alert-progress{background:#dcfce7}
+.scale-alert-banner.provisioned .scale-alert-bar{background:#168351;animation:none;width:100%;transform:none}
 </style>
 </head>
 <body>
@@ -378,6 +401,24 @@ tr.is-removed .ip{opacity:.8}
 
 <main class="shell" id="overview">
 <div class="page-heading"><div><h1>Auto Scaling &amp; Load Balancing</h1><p>Explore how your cloud responds to demand.</p></div><div class="cluster-state" role="status"><strong><i class="dot idle" id="cluster-dot"></i><span id="cluster-title">Connecting</span></strong><small id="cluster-note">Contacting the monitor service</small></div></div>
+
+<div id="scale-alert-banner" class="scale-alert-banner hidden" role="region" aria-live="assertive">
+  <div class="scale-alert-inner">
+    <div class="scale-alert-icon" id="scale-alert-icon">
+      <svg class="icon"><use href="#i-bolt"/></svg>
+    </div>
+    <div class="scale-alert-body">
+      <div class="scale-alert-headline">
+        <strong id="scale-alert-title">⚡ AutoScale Threshold Exceeded (&gt;80% CPU)</strong>
+        <span class="scale-alert-badge" id="scale-alert-badge">SCALE-OUT TRIGGERED</span>
+      </div>
+      <p id="scale-alert-desc">Cluster CPU reached high demand. CloudStack AutoScale policy is actively provisioning a new VM instance to distribute the load...</p>
+    </div>
+    <div class="scale-alert-progress">
+      <div class="scale-alert-bar" id="scale-alert-bar"></div>
+    </div>
+  </div>
+</div>
 
 <section class="metrics" aria-label="Cluster summary">
 <div class="metric"><div class="metric-icon"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg></div><div><strong id="metric-servers">—</strong><span class="label">Active servers</span></div></div>
@@ -445,13 +486,14 @@ const PALETTE = ['#173db3', '#0085ed', '#25bfc7', '#6985d9', '#6a62be', '#0b8aa1
 const LEVELS = [
   { name: 'Light traffic',  note: 'Steady, low-cost requests that show traffic being shared across servers without stressing them.' },
   { name: 'Normal traffic', note: 'Moderate load that aims for about 45% CPU on each server.' },
-  { name: 'Peak rush hour', note: 'Heavy load that aims for about 75% CPU on each server.' },
-  { name: 'Surge spike',    note: 'Ramps CPU up over about 28 seconds to trigger scale-out.' }
+  { name: 'Peak rush hour', note: 'Heavy load that aims for about 70% CPU on each server.' },
+  { name: 'Surge spike',    note: 'Gradually ramps CPU to ~90% over 28 seconds to trigger AutoScale without pinning 100%.' }
 ];
 
 const LOG_TYPES = {
   instance_added:    { kind: 'scale',   title: 'Server added' },
   instance_removed:  { kind: 'scale',   title: 'Server removed' },
+  threshold_reached: { kind: 'scale',   title: 'Scale threshold' },
   loadtest_started:  { kind: 'traffic', title: 'Traffic started' },
   loadtest_finished: { kind: 'traffic', title: 'Traffic completed' },
   loadtest_stopped:  { kind: 'traffic', title: 'Traffic stopped' }
@@ -660,6 +702,62 @@ function renderConnection() {
   $('conn-text').textContent = text;
 }
 
+function animateNumber(element, targetVal, isPercent = true, durationMs = 1600) {
+  const current = Number(element.dataset.currentVal);
+  const target = Math.round(targetVal);
+  if (isNaN(current)) {
+    element.dataset.currentVal = target;
+    element.textContent = target + (isPercent ? '%' : '');
+    return;
+  }
+  if (current === target) {
+    element.textContent = target + (isPercent ? '%' : '');
+    return;
+  }
+  const startTime = performance.now();
+  const startNum = current;
+  function update(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(1.0, elapsed / durationMs);
+    const ease = 1 - Math.pow(1 - progress, 3);
+    const val = Math.round(startNum + (target - startNum) * ease);
+    element.textContent = val + (isPercent ? '%' : '');
+    element.dataset.currentVal = val;
+    if (progress < 1.0) {
+      requestAnimationFrame(update);
+    } else {
+      element.dataset.currentVal = target;
+      element.textContent = target + (isPercent ? '%' : '');
+    }
+  }
+  requestAnimationFrame(update);
+}
+
+function renderScaleAlert(active, avgCpu, maxCpu, joined, running) {
+  const banner = $('scale-alert-banner');
+  if (!banner) return;
+
+  if (joined.length) {
+    banner.classList.remove('hidden');
+    banner.className = 'scale-alert-banner provisioned';
+    $('scale-alert-icon').innerHTML = '<svg class="icon"><use href="#i-trend"/></svg>';
+    $('scale-alert-title').textContent = `🚀 Scale-Out Complete: ${joined.map(i => i.name).join(', ')} Joined Cluster!`;
+    $('scale-alert-badge').textContent = 'CLUSTER EXPANDED';
+    $('scale-alert-badge').className = 'scale-alert-badge success';
+    $('scale-alert-desc').textContent = `New VM ${joined.map(i => i.name).join(', ')} is now online (${active.length} servers total). Incoming traffic is automatically rebalancing across all instances.`;
+  } else if ((avgCpu >= OVERLOAD_CPU || maxCpu >= OVERLOAD_CPU) && running) {
+    banner.classList.remove('hidden');
+    banner.className = 'scale-alert-banner';
+    $('scale-alert-icon').innerHTML = '<svg class="icon"><use href="#i-bolt"/></svg>';
+    $('scale-alert-title').textContent = `⚡ AutoScale Threshold Exceeded (${avgCpu}% CPU)`;
+    $('scale-alert-badge').textContent = 'THRESHOLD > 80% REACHED';
+    $('scale-alert-badge').className = 'scale-alert-badge';
+    $('scale-alert-desc').textContent = `High compute demand detected (average CPU reached ${avgCpu}%). AutoScale policy has triggered: a new VM instance is currently being provisioned to share the load...`;
+  } else {
+    banner.classList.add('hidden');
+  }
+}
+
 function renderCluster() {
   const now = Date.now();
   const active = state.instances.filter(i => i.status === 'active');
@@ -670,22 +768,27 @@ function renderCluster() {
     dot = 'error';
     title = 'Monitor unreachable';
     note = state.lastOk ? `Showing data from ${clock(state.lastOk)}. Retrying every 2 seconds.` : 'Retrying every 2 seconds.';
+    renderScaleAlert(active, 0, 0, [], false);
   } else if (!state.loaded) {
     title = 'Connecting';
     note = 'Contacting the monitor service';
+    renderScaleAlert(active, 0, 0, [], false);
   } else if (!active.length) {
     title = 'Waiting for servers';
     note = 'No heartbeats received yet';
+    renderScaleAlert(active, 0, 0, [], false);
   } else {
     const joined = active.filter(i => now - (state.scaledOutAt.get(i.ip) || 0) < RECENT_MS);
     const left = state.instances.filter(i => i.status === 'removed' && now - (state.removedAt.get(i.ip) || 0) < RECENT_MS);
     const maxCpu = active.reduce((m, i) => Math.max(m, i.cpu), 0);
+    const avgCpu = active.length ? Math.round(active.reduce((m, i) => m + i.cpu, 0) / active.length) : 0;
+
     if (joined.length) {
       dot = 'running'; title = 'Scaled out';
       note = `${joined.map(i => i.name).join(', ')} joined. ${plural(active.length, 'server')} active.`;
-    } else if (maxCpu > OVERLOAD_CPU) {
-      dot = 'warn'; title = 'Under heavy load';
-      note = `Highest CPU is ${Math.round(maxCpu)}%.`;
+    } else if (avgCpu >= OVERLOAD_CPU || maxCpu >= OVERLOAD_CPU) {
+      dot = 'warn'; title = 'Scale threshold reached (>80%)';
+      note = `Cluster average CPU is ${avgCpu}%. AutoScale trigger active — new VM provisioning initiated.`;
     } else if (running) {
       dot = 'running'; title = 'Traffic test running';
       note = `${plural(active.length, 'server')} sharing the traffic`;
@@ -696,6 +799,7 @@ function renderCluster() {
       dot = ''; title = 'Cluster ready';
       note = `${plural(active.length, 'healthy server')}`;
     }
+    renderScaleAlert(active, avgCpu, maxCpu, joined, running);
   }
   $('cluster-dot').className = 'dot' + (dot ? ' ' + dot : '');
   $('cluster-title').textContent = title;
@@ -744,13 +848,16 @@ const STATUS_CLASS = { healthy: '', scaled: ' scaled', overloaded: ' overloaded'
 function setUsage(u, value, removed, warn) {
   if (removed) {
     u.text.textContent = '—';
+    delete u.text.dataset.currentVal;
     u.track.style.visibility = 'hidden';
     return;
   }
-  u.text.textContent = Math.round(value) + '%';
+  animateNumber(u.text, value, true, 1600);
   u.track.style.visibility = '';
   u.fill.style.width = value + '%';
   u.fill.style.background = warn ? '#d98728' : '';
+  u.track.classList.toggle('overloaded', warn);
+  u.track.classList.toggle('active', value > 15);
 }
 
 function updateRow(r, inst, kind) {
@@ -817,13 +924,17 @@ function renderSummary() {
   $('metric-servers').textContent = String(active.length);
   if (!active.length) {
     $('metric-cpu').textContent = '—';
+    delete $('metric-cpu').dataset.currentVal;
     $('metric-ram').textContent = '—';
+    delete $('metric-ram').dataset.currentVal;
     $('metric-requests').textContent = '0';
     return;
   }
   const avg = key => Math.round(active.reduce((a, i) => a + i[key], 0) / active.length);
-  $('metric-cpu').textContent = avg('cpu') + '%';
-  $('metric-ram').textContent = avg('ram') + '%';
+  const avgCpu = avg('cpu');
+  const avgRam = avg('ram');
+  animateNumber($('metric-cpu'), avgCpu, true, 1600);
+  animateNumber($('metric-ram'), avgRam, true, 1600);
   $('metric-requests').textContent = fmt(active.reduce((a, i) => a + i.request_count, 0));
 }
 

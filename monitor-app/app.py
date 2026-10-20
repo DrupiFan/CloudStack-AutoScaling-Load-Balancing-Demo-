@@ -20,11 +20,11 @@ DISTRIBUTION = {}   # instance_ip -> count of requests answered during load test
 LOADTEST_STATE = {
     "running": False,
     "target": "",
-    "mode": "light",        # "light" -> hits /info, "heavy" -> hits /burn (pins CPU)
+    "mode": "light",        # "light" -> hits /info, "heavy" -> hits /burn (spins CPU)
     "intensity": 1,
     "concurrency": 1,
     "duration_seconds": 60,
-    "burn_seconds": 3,      # only used in heavy mode: how long each /burn call spins CPU
+    "burn_seconds": 2,      # only used in heavy mode: how long each /burn call spins CPU
     "delay_ms": 0,
     "ramp_seconds": 0,
     "sent": 0,
@@ -39,6 +39,7 @@ LOADTEST_STATE = {
 HEARTBEAT_TIMEOUT = 12          # seconds without a heartbeat -> mark instance removed
 PURGE_AFTER = 300               # seconds after removal -> drop from list entirely
 MAX_LOG_ENTRIES = 300
+THRESHOLD_LOGGED = False
 
 
 def log_event(event_type, message):
@@ -53,6 +54,7 @@ def log_event(event_type, message):
 # ---------------------------------------------------------------------------
 @app.route('/heartbeat', methods=['POST'])
 def heartbeat():
+    global THRESHOLD_LOGGED
     data = request.get_json(force=True, silent=True) or {}
     ip = data.get('ip')
     name = data.get('name', ip)
@@ -82,6 +84,7 @@ def heartbeat():
         }
 
     if is_new:
+        THRESHOLD_LOGGED = False
         log_event("instance_added", f"🚀 AutoScale Provisioned: New server {name} ({ip}) joined the cluster")
     elif was_removed:
         log_event("instance_added", f"🔄 Server Rejoined: {name} ({ip}) is active again")
@@ -90,10 +93,13 @@ def heartbeat():
 
 
 def sweeper():
+    global THRESHOLD_LOGGED
     while True:
         time.sleep(3)
         now = time.time()
         newly_removed = []
+        threshold_event = None
+
         with LOCK:
             for ip, inst in list(INSTANCES.items()):
                 if inst["status"] == "active" and now - inst["last_seen"] > HEARTBEAT_TIMEOUT:
@@ -101,10 +107,24 @@ def sweeper():
                     newly_removed.append((inst["name"], ip))
                 elif inst["status"] == "removed" and now - inst["last_seen"] > PURGE_AFTER:
                     del INSTANCES[ip]
+
+            # Detect scale threshold crossing (>80% avg CPU)
+            active_cpus = [inst["cpu"] for inst in INSTANCES.values() if inst["status"] == "active"]
+            if active_cpus:
+                avg_cpu = sum(active_cpus) / len(active_cpus)
+                if avg_cpu >= 80.0 and not THRESHOLD_LOGGED:
+                    THRESHOLD_LOGGED = True
+                    threshold_event = round(avg_cpu, 1)
+                elif avg_cpu < 65.0:
+                    THRESHOLD_LOGGED = False
+
         # log AFTER releasing LOCK - log_event() acquires LOCK itself,
         # calling it while still holding LOCK above would deadlock
         for name, ip in newly_removed:
             log_event("instance_removed", f"📉 AutoScale Scale-Down: Server {name} ({ip}) decommissioned")
+
+        if threshold_event is not None:
+            log_event("threshold_reached", f"⚡ AutoScale Threshold Exceeded: Average cluster CPU reached {threshold_event}% (>80%). Scale-out initiated!")
 
 
 threading.Thread(target=sweeper, daemon=True).start()
@@ -177,34 +197,35 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, t
         # Calculate current ramp factor (0.05 to 1.0) for gradual CPU climb
         elapsed = time.time() - (started_at or time.time())
         if ramp_seconds > 0 and elapsed < ramp_seconds:
-            ramp_factor = max(0.05, min(1.0, elapsed / float(ramp_seconds)))
+            progress = elapsed / float(ramp_seconds)
+            ramp_factor = max(0.05, min(1.0, progress ** 1.15))
         else:
             ramp_factor = 1.0
 
         # Dynamic worker gating: smoothly activate more threads over the ramp period
         active_workers = max(1, int(concurrency * ramp_factor))
         if worker_id >= active_workers:
-            time.sleep(0.3)
+            time.sleep(0.25)
             continue
 
         if mode == "heavy":
-            # Scale target CPU load from 15% up to target_max_load
-            curr_target_load = max(10, min(100, int(15 + (target_max_load - 15) * ramp_factor)))
+            # Scale target CPU load from 15% up to target_max_load (capped at 90% for clean headroom)
+            curr_target_load = max(10, min(90, int(15 + (target_max_load - 15) * ramp_factor)))
 
             # Probabilistic burn gating: at early ramp stages, send mostly /info (0% CPU)
-            # so the cluster warms up smoothly instead of immediately pinning CPU to 100%
-            burn_probability = min(1.0, max(0.15, ramp_factor * 1.1))
+            # so the cluster warms up smoothly instead of immediately pinning CPU
+            burn_probability = min(1.0, max(0.2, ramp_factor * 1.05))
             if random.random() < burn_probability:
-                current_burn = max(1, int(burn_seconds * (0.3 + 0.7 * ramp_factor)))
+                current_burn = max(1, int(burn_seconds * (0.5 + 0.5 * ramp_factor)))
                 url = base_target + f"/burn?seconds={current_burn}&load={curr_target_load}"
                 req_timeout = current_burn + 8
-                extra_delay = int(400 * (1.0 - ramp_factor))
+                extra_delay = int(350 * (1.0 - ramp_factor))
                 current_delay = delay_ms + extra_delay
             else:
                 # Interspersed light request to keep average CPU within target range
                 url = base_target + "/info"
                 req_timeout = 5
-                extra_delay = int(800 * (1.0 - ramp_factor))
+                extra_delay = int(600 * (1.0 - ramp_factor))
                 current_delay = delay_ms + extra_delay
         else:
             url = base_target + "/info"
@@ -264,9 +285,9 @@ def loadtest_start():
         except (ValueError, TypeError):
             intensity = 4
         # 1: Light (Load Balancing Demo)
-        # 2: Moderate Traffic (~40% CPU)
+        # 2: Moderate Traffic (~45% CPU)
         # 3: Heavy Traffic (~70% CPU)
-        # 4: Surge Spike (>90% CPU - Triggers AutoScale with gradual ramp)
+        # 4: Surge Spike (>80% CPU - Triggers AutoScale with smooth gradual ramp, targets ~90%)
         if intensity == 1:
             mode = "light"
             concurrency = 3
@@ -278,8 +299,8 @@ def loadtest_start():
         elif intensity == 2:
             mode = "heavy"
             concurrency = 3
-            burn_seconds = 1
-            delay_ms = 400
+            burn_seconds = 2
+            delay_ms = 300
             ramp_seconds = 15
             target_max_load = 45
             intensity_name = "Moderate Traffic (~45% CPU)"
@@ -287,26 +308,26 @@ def loadtest_start():
             mode = "heavy"
             concurrency = 4
             burn_seconds = 2
-            delay_ms = 200
-            ramp_seconds = 22
-            target_max_load = 75
-            intensity_name = "Heavy Traffic (~75% CPU)"
+            delay_ms = 150
+            ramp_seconds = 20
+            target_max_load = 70
+            intensity_name = "Heavy Traffic (~70% CPU)"
         else:
             mode = "heavy"
             concurrency = 6
-            burn_seconds = 3
+            burn_seconds = 2
             delay_ms = 0
             ramp_seconds = 28
-            target_max_load = 98
+            target_max_load = 90
             intensity_name = "Surge Spike (AutoScale Demo)"
     else:
         # Direct parameter fallback
         mode = data.get("mode") if data.get("mode") in ("light", "heavy") else "light"
         concurrency = max(1, min(200, int(data.get("concurrency", 1))))
-        burn_seconds = max(1, min(15, int(data.get("burn_seconds", 3))))
+        burn_seconds = max(1, min(15, int(data.get("burn_seconds", 2))))
         delay_ms = max(0, min(5000, int(data.get("delay_ms", 0))))
         ramp_seconds = max(0, min(60, int(data.get("ramp_seconds", 20 if mode == "heavy" else 0))))
-        target_max_load = int(data.get("target_max_load", 95 if mode == "heavy" else 20))
+        target_max_load = int(data.get("target_max_load", 90 if mode == "heavy" else 20))
         intensity = 4 if mode == "heavy" else 1
         intensity_name = f"Custom ({mode})"
 
