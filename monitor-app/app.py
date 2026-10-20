@@ -34,6 +34,7 @@ LOADTEST_STATE = {
     "stop_flag": False,
     "started_at": None,
     "end_time": None,
+    "instance_baseline": 0,  # active backends at test start (from heartbeats)
 }
 
 HEARTBEAT_TIMEOUT = 12          # seconds without a heartbeat -> mark instance removed
@@ -186,6 +187,10 @@ def normalize_target(raw):
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def _active_instances():
+    return [inst for inst in INSTANCES.values() if inst["status"] == "active"]
+
+
 def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, target_max_load):
     while True:
         with LOCK:
@@ -193,6 +198,17 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, t
                 return
             started_at = LOADTEST_STATE["started_at"]
             concurrency = LOADTEST_STATE["concurrency"]
+            active = _active_instances()
+            n_active = len(active)
+            avg_cpu = (sum(inst["cpu"] for inst in active) / n_active) if n_active else 0
+            baseline = LOADTEST_STATE.get("instance_baseline") or 0
+            # Count original backends as they heartbeat in. Do not raise this after
+            # scale-out (high CPU) or total demand would climb with every new VM.
+            if n_active > baseline and avg_cpu < 65:
+                baseline = n_active
+                LOADTEST_STATE["instance_baseline"] = baseline
+        n_active = max(1, n_active)
+        n_baseline = max(1, baseline)
 
         # Calculate current ramp factor (0.05 to 1.0) for gradual CPU climb
         elapsed = time.time() - (started_at or time.time())
@@ -202,15 +218,19 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, t
         else:
             ramp_factor = 1.0
 
-        # Dynamic worker gating: smoothly activate more threads over the ramp period
-        active_workers = max(1, int(concurrency * ramp_factor))
+        # Size worker count for the original cluster; ramp still activates them gradually
+        active_workers = max(1, int(concurrency * n_baseline * ramp_factor))
         if worker_id >= active_workers:
             time.sleep(0.25)
             continue
 
         if mode == "heavy":
-            # Scale target CPU load from 15% up to target_max_load (capped at 90% for clean headroom)
-            curr_target_load = max(10, min(90, int(15 + (target_max_load - 15) * ramp_factor)))
+            # Per-VM target if the original set never grew (capped at 90% for headroom)
+            cluster_load = max(10, min(90, int(15 + (target_max_load - 15) * ramp_factor)))
+            # Total demand = that target × original backends, shared across whoever is
+            # alive now — so min=1/2/3 still hit the scale-out threshold, then average
+            # CPU drops when CloudStack adds a VM.
+            curr_target_load = max(5, min(90, int(cluster_load * n_baseline / n_active)))
 
             # Probabilistic burn gating: at early ramp stages, send mostly /info (0% CPU)
             # so the cluster warms up smoothly instead of immediately pinning CPU
@@ -258,8 +278,10 @@ def worker(worker_id, base_target, mode, burn_seconds, delay_ms, ramp_seconds, t
 
 
 def run_loadtest(target, mode, concurrency, burn_seconds, delay_ms, ramp_seconds, target_max_load):
+    # Extra threads stay idle unless heartbeats show a larger original cluster
+    worker_cap = max(concurrency, min(200, concurrency * 10))
     threads = []
-    for wid in range(concurrency):
+    for wid in range(worker_cap):
         t = threading.Thread(target=worker, args=(wid, target, mode, burn_seconds, delay_ms, ramp_seconds, target_max_load), daemon=True)
         threads.append(t)
         t.start()
@@ -337,12 +359,14 @@ def loadtest_start():
     with LOCK:
         if LOADTEST_STATE["running"]:
             return jsonify({"error": "a load test is already running"}), 400
+        n_baseline = sum(1 for inst in INSTANCES.values() if inst["status"] == "active")
         LOADTEST_STATE.update({
             "running": True, "target": target, "mode": mode, "intensity": intensity,
             "concurrency": concurrency, "duration_seconds": duration_seconds,
             "burn_seconds": burn_seconds, "delay_ms": delay_ms, "ramp_seconds": ramp_seconds,
             "sent": 0, "success": 0, "errors": 0, "last_error": None, "stop_flag": False,
             "started_at": now, "end_time": now + duration_seconds,
+            "instance_baseline": n_baseline,
         })
         DISTRIBUTION.clear()
 
